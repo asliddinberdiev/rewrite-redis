@@ -1,14 +1,11 @@
 package main
 
 import (
-	"context"
+	"flag"
 	"fmt"
 	"log"
 	"log/slog"
 	"net"
-	"time"
-
-	"github.com/asliddinberdiev/rewrite-redis.git/client"
 )
 
 const defaultListenAddr = ":5001"
@@ -17,13 +14,18 @@ type Config struct {
 	ListenAddr string
 }
 
+type Message struct {
+	cmd  Command
+	peer *Peer
+}
+
 type Server struct {
 	Config
 	peers     map[*Peer]bool
 	ln        net.Listener
 	addPeerCh chan *Peer
 	quitCh    chan struct{}
-	msgCh     chan []byte
+	msgCh     chan Message
 
 	kv *KV
 }
@@ -38,7 +40,7 @@ func NewServer(cfg Config) *Server {
 		peers:     make(map[*Peer]bool),
 		addPeerCh: make(chan *Peer),
 		quitCh:    make(chan struct{}),
-		msgCh:     make(chan []byte),
+		msgCh:     make(chan Message),
 		kv:        NewKV(),
 	}
 }
@@ -58,15 +60,19 @@ func (s *Server) Start() error {
 	return s.acceptLoop()
 }
 
-func (s *Server) handleRawMessage(rawMsg []byte) error {
-	cmd, err := parseCommand(string(rawMsg))
-	if err != nil {
-		slog.Error("failed to parse command", "err", err, "rawMsg", string(rawMsg))
-	}
-
-	switch v := cmd.(type) {
+func (s *Server) handleMessage(msg Message) error {
+	switch v := msg.cmd.(type) {
 	case SetCommand:
 		return s.kv.Set(v.key, v.val)
+	case GetCommand:
+		val, ok := s.kv.Get(v.key)
+		if !ok {
+			return fmt.Errorf("key not found")
+		}
+
+		if _, err := msg.peer.Send(val); err != nil {
+			slog.Error("peer send error", "err", err)
+		}
 	}
 
 	return nil
@@ -75,8 +81,8 @@ func (s *Server) handleRawMessage(rawMsg []byte) error {
 func (s *Server) loop() {
 	for {
 		select {
-		case rawMsg := <-s.msgCh:
-			if err := s.handleRawMessage(rawMsg); err != nil {
+		case msg := <-s.msgCh:
+			if err := s.handleMessage(msg); err != nil {
 				slog.Error("raw message error", "err", err)
 			}
 		case <-s.quitCh:
@@ -102,27 +108,17 @@ func (s *Server) acceptLoop() error {
 func (s *Server) handleConn(conn net.Conn) {
 	peer := NewPeer(conn, s.msgCh)
 	s.addPeerCh <- peer
-	slog.Info("new peer connected", "remoteAddr", conn.RemoteAddr())
 	if err := peer.readLoop(); err != nil {
 		slog.Error("peer read error", "err", err, "remoteAddr", conn.RemoteAddr())
 	}
 }
 
 func main() {
-	server := NewServer(Config{})
-	go func() {
-		log.Fatal(server.Start())
-	}()
-	time.Sleep(time.Second)
+	listenAddr := flag.String("listenAddr", defaultListenAddr, "listen address of the server")
+	flag.Parse()
 
-	c := client.New("localhost:5001")
-	for i := 0; i < 10; i++ {
-		if err := c.Set(context.TODO(), fmt.Sprintf("foo_%d", i), "bar"); err != nil {
-			log.Fatal(err)
-		}
-	}
-
-	time.Sleep(time.Second)
-	fmt.Println(server.kv.data)
-
+	server := NewServer(Config{
+		ListenAddr: *listenAddr,
+	})
+	log.Fatal(server.Start())
 }
