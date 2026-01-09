@@ -7,7 +7,7 @@ A simplified, high-performance Redis-clone implemented in **Go** for educational
 ## 🚀 Features
 
 * **TCP Server:** Built using the `net` package to handle multiple concurrent connections.
-* **RESP Protocol:** Custom implementation and integration with `github.com/tidwall/resp` for command parsing[cite: 1, 3].
+* **RESP Protocol:** Custom implementation and integration with `github.com/tidwall/resp` for command parsing.
 * **In-Memory Storage:** A thread-safe Key-Value store utilizing `sync.RWMutex` for data integrity.
 * **Supported Commands:**
     * `SET <key> <value>`: Store a string value.
